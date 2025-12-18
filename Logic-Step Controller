@@ -1,0 +1,33 @@
+# Set up streams for 8-bit bitvectors
+i1 : bv[8] = in console  # Current Value (Sensor)
+i2 : bv[8] = in console  # Target Value (Setpoint)
+o1 : bv[8] = out console # Control Output (Actuator)
+
+# Define the Logic Controller
+run always (
+    # PRE-REQUISITES: Calculate current error and trend
+    (local_error[t] : bv[8] = i2[t] - i1[t]) &&
+    (local_trend[t] : bv[8] = i1[t] - i1[t-1]) &&
+
+    # REGIME 1: EMERGENCY RESPONSE (Far from target)
+    # If error > 20, set output to maximum (100)
+    (local_error[t] > { 20 } : bv[8] ? 
+        o1[t] = { 100 } : bv[8] :
+        
+    # REGIME 2: PRE-EMPTIVE BRAKING (Approaching target fast)
+    # If error is small (< 5) but we are moving fast toward target (Trend > 3)
+    # Cut power to 0 to prevent overshoot.
+    (local_error[t] < { 5 } : bv[8] && local_trend[t] > { 3 } : bv[8]) ?
+        o1[t] = { 0 } : bv[8] :
+
+    # REGIME 3: PERSISTENCE NUDGE (Stuck near target)
+    # If error has been exactly the same for 2 steps (stiction), pulse power.
+    (local_error[t] == local_error[t-1] && local_error[t] != { 0 } : bv[8]) ?
+        o1[t] = { 15 } : bv[8] :
+
+    # REGIME 4: FINE TUNING (Normal operation)
+    # Gentle power if error is present.
+    (local_error[t] > { 0 } : bv[8] ? 
+        o1[t] = { 5 } : bv[8] : 
+        o1[t] = { 0 } : bv[8]))
+)
