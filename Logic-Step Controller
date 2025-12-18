@@ -1,33 +1,45 @@
-# Set up streams for 8-bit bitvectors
-i1 : bv[8] = in console  # Current Value (Sensor)
-i2 : bv[8] = in console  # Target Value (Setpoint)
-o1 : bv[8] = out console # Control Output (Actuator)
+# Pure Logic Controller for a water bath whitch targets 37°C.
 
-# Define the Logic Controller
+# i1: Current Temp (from probe)
+# i2: Target Temp (37)
+# o1: Heater Power (0-100%)
+
+set charvar off
+
 run always (
-    # PRE-REQUISITES: Calculate current error and trend
-    (local_error[t] : bv[8] = i2[t] - i1[t]) &&
-    (local_trend[t] : bv[8] = i1[t] - i1[t-1]) &&
+  # 1. State Definitions
+  (current_temp[t] : bv[8] = i1[t]) &&
+  (target_temp[t]  : bv[8] = { 37 } : bv[8]) &&
+  
+  # 2. Trend Analysis (Velocity of heating)
+  # positive value = heating up, negative = cooling down
+  (temp_trend[t] : bv[8] = current_temp[t] - current_temp[t-1]) &&
 
-    # REGIME 1: EMERGENCY RESPONSE (Far from target)
-    # If error > 20, set output to maximum (100)
-    (local_error[t] > { 20 } : bv[8] ? 
-        o1[t] = { 100 } : bv[8] :
-        
-    # REGIME 2: PRE-EMPTIVE BRAKING (Approaching target fast)
-    # If error is small (< 5) but we are moving fast toward target (Trend > 3)
-    # Cut power to 0 to prevent overshoot.
-    (local_error[t] < { 5 } : bv[8] && local_trend[t] > { 3 } : bv[8]) ?
-        o1[t] = { 0 } : bv[8] :
+  # 3. LOGIC REGIMES
+  
+  # REGIME A: RAPID HEAT-UP
+  # If we are below 32°C, full power regardless of trend.
+  (current_temp[t] < { 32 } : bv[8] ? 
+    o1[t] = { 100 } : bv[8] :
 
-    # REGIME 3: PERSISTENCE NUDGE (Stuck near target)
-    # If error has been exactly the same for 2 steps (stiction), pulse power.
-    (local_error[t] == local_error[t-1] && local_error[t] != { 0 } : bv[8]) ?
-        o1[t] = { 15 } : bv[8] :
+  # REGIME B: PRE-EMPTIVE BRAKING (The "Anti-Overshoot" Logic)
+  # If we are between 34-36°C AND rising fast (trend >= 2),
+  # kill power NOW so we don't blow past 37°C.
+  (current_temp[t] > { 33 } : bv[8] && current_temp[t] < { 37 } : bv[8] && 
+   temp_trend[t] >= { 2 } : bv[8]) ?
+    o1[t] = { 0 } : bv[8] :
 
-    # REGIME 4: FINE TUNING (Normal operation)
-    # Gentle power if error is present.
-    (local_error[t] > { 0 } : bv[8] ? 
-        o1[t] = { 5 } : bv[8] : 
-        o1[t] = { 0 } : bv[8]))
+  # REGIME C: SUSTAIN MODE (The "Nudge")
+  # If we are at 36°C and the trend is 0 (stagnant), 
+  # give it a tiny 10% pulse to tip it into 37°C.
+  (current_temp[t] == { 36 } : bv[8] && temp_trend[t] == { 0 } : bv[8]) ?
+    o1[t] = { 10 } : bv[8] :
+
+  # REGIME D: EQUILIBRIUM
+  # If we are >= 37°C, power off.
+  (current_temp[t] >= { 37 } : bv[8] ?
+    o1[t] = { 0 } : bv[8] :
+    
+    # Default: Low maintenance heat
+    o1[t] = { 5 } : bv[8]))
 )
