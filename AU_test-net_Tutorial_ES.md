@@ -1,7 +1,7 @@
 # 🐧 Guía de Configuración del Nodo Tau Testnet (Linux)
 
 **SO:** Ubuntu 20.04+ / Debian 11+
-**Objetivo:** Ejecutar un nodo de consenso basado en Python con un motor lógico C++ dockerizado.
+**Objetivo:** Ejecutar un nodo de consenso basado en Python con un motor lógico (Tau) dockerizado.
 
 ### 1. Instalar Dependencias del Sistema
 
