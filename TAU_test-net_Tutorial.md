@@ -2,7 +2,7 @@
 
 **OS:** Ubuntu 20.04+ / Debian 11+
 
-**Goal:** Run a Python-based consensus node with a Dockerized C++ logic engine.
+**Goal:** Run a Python-based consensus node with a Dockerized Tau logic engine.
 
 ### 1. Install System Dependencies
 
