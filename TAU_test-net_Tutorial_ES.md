@@ -38,24 +38,6 @@ cd tau-lang
 ```
 
 
-2. **Arreglar el Entrypoint del Dockerfile:**
-La imagen necesita saber qué ejecutar.
-* Abre el archivo: `nano Dockerfile`
-* Desplázate hasta el final (la etapa `runner`).
-* Cambia la línea `ENTRYPOINT` para usar comillas dobles:
-
-
-```dockerfile
-# En la etapa runner al final del archivo:
-WORKDIR /
-ENTRYPOINT ["/usr/bin/tau"]
-CMD []
-
-```
-
-
-* Guarda y sal (`Ctrl+O`, `Enter`, `Ctrl+X`).
-
 
 3. **Construir la Imagen:**
 Apunta a la etapa runner de Linux.
