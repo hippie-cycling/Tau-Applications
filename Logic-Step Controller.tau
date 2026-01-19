@@ -1,0 +1,48 @@
+# ============================================================================
+# PURE LOGIC TEMPERATURE CONTROLLER
+# Logic-based PID replacement using strictly verified syntax
+# ============================================================================
+
+set charvar off
+
+# 1. STREAM DEFINITIONS
+# We use 8-bit bitvectors (0-255) for temperature and power.
+# ----------------------------------------------------------------------------
+i1 : bv[8] = in console   # Sensor Input
+o1 : bv[8] = out console  # Heater Output
+
+# 2. THE CONTROL LOGIC
+# ----------------------------------------------------------------------------
+# LOGIC MAP:
+# < 32 (#x20) ....... Panic Heat (100 / #x64)
+# > 35 (#x23) ....... Check for Braking
+# = 36 (#x24) ....... Check for Stiction (Nudge)
+# >= 37 (#x25) ...... Over-temp Cutoff (0 / #x00)
+# Else .............. Standard Approach (50 / #x32)
+
+run always (
+    # REGIME 1: COLD START (Temp < 32)
+    # Note the structure: (Condition) ? (Assignment A) : (Next Check)
+    (i1[t] < { #x20 }:bv[8]) ? (o1[t] = { #x64 }:bv[8]) :
+    (
+        # REGIME 2: PRE-EMPTIVE BRAKING
+        # If Temp between 35-37 AND Rising Fast (> 2 degrees per step)
+        ((i1[t] >= { #x23 }:bv[8]) && (i1[t] < { #x25 }:bv[8]) && (i1[t] > (i1[t-1] + { #x02 }:bv[8]))) ? 
+        (o1[t] = { #x00 }:bv[8]) :
+        (
+            # REGIME 3: SUSTAIN NUDGE
+            # If Temp is exactly 36 AND has not changed since last step (Stuck)
+            # Note: Using '=' for equality check, matching your snippets
+            ((i1[t] = { #x24 }:bv[8]) && (i1[t] = i1[t-1])) ? 
+            (o1[t] = { #x0F }:bv[8]) :
+            (
+                # REGIME 4: TARGET REACHED / OVERSHOOT
+                # If Temp >= 37, Cut Power
+                (i1[t] >= { #x25 }:bv[8]) ? (o1[t] = { #x00 }:bv[8]) :
+                
+                # REGIME 5: STANDARD APPROACH (Default)
+                (o1[t] = { #x32 }:bv[8])
+            )
+        )
+    )
+)
