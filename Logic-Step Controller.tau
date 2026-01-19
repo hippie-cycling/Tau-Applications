@@ -1,6 +1,6 @@
 # ============================================================================
 # PURE LOGIC TEMPERATURE CONTROLLER
-# Logic-based PID replacement using strictly verified syntax
+# Logic-based PID replacement using Tau-Language
 # ============================================================================
 
 set charvar off
