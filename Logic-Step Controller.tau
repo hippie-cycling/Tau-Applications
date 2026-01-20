@@ -46,3 +46,80 @@ run always (
         )
     )
 )
+
+
+# 1. IT REPLACES "GUESSWORK" WITH "DECISIONS"
+# ----------------------------------------------------------------------------
+# A standard PID Controller (used in everything from your thermostat to cruise
+# control) works by balancing a mathematical equation. To make it work,
+# engineers have to "tune" these numbers (P, I, D) through trial and error.
+# If they get it wrong, the system oscillates or becomes unstable.
+#
+# Why this Tau code is better: It uses Discrete Regimes. It doesn't "calculate"
+# the power; it DECIDES the state.
+#
+# Instead of multiplying error by a floating-point number (which is slow and
+# approximate), it says: "If I am approaching fast (Regime 2), cut the power."
+#
+# This creates a Deadbeat Controller—a system that hits the target and stops
+# dead, without the oscillation common in PID loops.
+
+# 2. NATIVE "TIME TRAVEL" (TEMPORAL LOGIC)
+# ----------------------------------------------------------------------------
+# In C++ or Python, if you want to know what happened "a moment ago," you
+# have to manually create variables like previous_temp, update them every
+# loop, and ensure they don't get corrupted.
+#
+# In this code, look at Regime 2: (i1[t] > (i1[t-1] + { #x02 }:bv[8]))
+#
+# This line natively checks the velocity of the temperature change by looking
+# directly into the past (t-1).
+#
+# Impressive Factor: The language treats Time as just another dimension you can
+# index, like an array. You don't manage the state; the language manages the state.
+
+# 3. IT IS MATHEMATICALLY PROVABLE (SAFETY)
+# ----------------------------------------------------------------------------
+# This is the "Holy Grail" for critical systems (medical devices, nuclear
+# power, spacecraft).
+#
+# Standard Code: You hope your if/else statements cover every edge case.
+#
+# Tau Code: Because this is written in a Logic Language, you can run a Solver
+# against it.
+#
+# You can ask the Tau engine: "Is there ANY sequence of inputs that results
+# in the heater being ON when the temperature is > 40?" The solver will
+# return UNSAT (Unsatisfiable), mathematically proving that it is impossible
+# for this code to overheat, regardless of sensor glitches or weird timing.
+# You cannot do this with a C++ PID controller.
+
+# 4. ZERO FLOATING-POINT OVERHEAD (EFFICIENCY)
+# ----------------------------------------------------------------------------
+# Notice the type definitions: bv[8].
+#
+# This code uses 8-bit BitVectors (integers 0-255).
+#
+# Standard PIDs require Floating Point Math (decimals), which is
+# computationally heavy and requires complex processors.
+#
+# Impressive Factor: This sophisticated control logic could run on a processor
+# that costs pennies (or even directly on an FPGA chip), because it requires
+# zero decimal math.
+
+# 5. IT SOLVES "INTEGRAL WINDUP" WITHOUT MATH
+# ----------------------------------------------------------------------------
+# One of the hardest things to fix in a PID is "Integral Windup"—where the
+# controller "remembers" that it was cold for a long time and keeps the
+# heater on even after it gets hot.
+#
+# Look at Regime 3 (Sustain Nudge): ((i1[t] = { #x24 }:bv[8]) && (i1[t] = i1[t-1]))
+#
+# This replaces the "Integral" term with a Logic Trap:
+# "Am I at 36 degrees?" AND "Did I fail to move since last step?"
+#
+# If YES -> Apply Nudge.
+# If NO (temperature moves even a tiny bit) -> Stop Nudge.
+#
+# It solves the physical problem of "stiction" (getting stuck near the target)
+# without accumulating any dangerous history that causes overshoot.
