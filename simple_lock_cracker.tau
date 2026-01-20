@@ -1,0 +1,51 @@
+# ============================================================================
+# LOGIC LOCK CRACKER
+# A Constraint Satisfaction Problem (CSP) Demo
+# ============================================================================
+
+set charvar off
+
+# We use 'solve' because we aren't running a continuous controller.
+# We are asking for a specific set of values.
+
+solve (
+    # ---------------------------------------------------------
+    # 1. DEFINE THE SEARCH SPACE
+    # ---------------------------------------------------------
+    # We need 4 digits (d1, d2, d3, d4), each is 8-bit.
+    # We restrict them to be between 1 and 9.
+    
+    (d1 >= { #x01 }:bv[8]) && (d1 <= { #x09 }:bv[8]) &&
+    (d2 >= { #x01 }:bv[8]) && (d2 <= { #x09 }:bv[8]) &&
+    (d3 >= { #x01 }:bv[8]) && (d3 <= { #x09 }:bv[8]) &&
+    (d4 >= { #x01 }:bv[8]) && (d4 <= { #x09 }:bv[8]) &&
+
+    # ---------------------------------------------------------
+    # 2. THE CLUES (Constraints)
+    # ---------------------------------------------------------
+
+    # CLUE A: "The first digit is double the second."
+    # Math: d1 = d2 * 2
+    (d1 = d2 * { #x02 }:bv[8]) &&
+
+    # CLUE B: "The sum of all digits is 15."
+    # Math: d1 + d2 + d3 + d4 = 15
+    # Note: We group them to ensure safe addition order
+    ((d1 + d2 + d3 + d4) = { #x0F }:bv[8]) &&
+
+    # CLUE C: "The fourth digit is the first minus 1."
+    # Math: d4 = d1 - 1
+    (d4 = d1 - { #x01 }:bv[8]) &&
+
+    # CLUE D: "All digits must be distinct."
+    # We must explicitly state that no two digits are equal.
+    (d1 != d2) && (d1 != d3) && (d1 != d4) &&
+    (d2 != d3) && (d2 != d4) &&
+    (d3 != d4)
+)
+
+#Why is this impressive?
+#No Algorithms: You did not write a for loop. You did not write if statements to check guesses. You simply defined the Truth, and Tau found the only reality where that Truth exists.
+#Reverse Engineering: You can use this for reverse engineering. If you have a black-box function f(x) and you know the output is Y, you can define f(x) = Y in Tau, and it will solve for x (the input).
+#Formal Verification: This is exactly how we find bugs in computer chips. We describe the chip logic, then we describe a "Bug State" (e.g., "The admin panel is accessible without a password"). 
+#We ask the solver "Does a solution exist?" If it says SAT (Satisfiable), it gives us the "hack" steps to reproduce the bug.
