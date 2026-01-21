@@ -1,4 +1,4 @@
-This is repo to archive programs, tutorials and references related to Tau-Lang (an expressive, decidable and executable formal software specification language).
+This is a repo to archive programs, tutorials and references related to Tau-Lang (an expressive, decidable and executable formal software specification language).
 
 For information about Tau-Lang visit: https://github.com/IDNI/tau-lang
 
