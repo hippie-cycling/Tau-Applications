@@ -1,58 +1,64 @@
 # ============================================================================
-# TAU PISTON CONTROLLER
-# Target Volume: 0.50 ml (Scaled to 50)
+# TAU LOGIC CONTROLLER: TEMPORAL GOVERNOR
+# Target: 0.50 ml (Scaled 50) | Cycle Time: 30ms
 # ============================================================================
 
 set charvar off
 
-# STREAMS
-# i1: Measured Volume (0.0 - 2.55 ml mapped to 0-255)
-# o1: Target Amplitude (0.0 - 10.0 mm mapped to 0-100)
+# 1. IO DEFINITIONS
+# ----------------------------------------------------------------------------
+# i1: Sensor Input (Volume x100)
+# o1: Actuator Output (Amplitude x10)
 bv[8] i1 = in console
 bv[8] o1 = out console
 
-# CONSTANTS MAP
-# Target Vol = 50 (#x32)
-# Low Limit  = 45 (#x2D)
-# High Limit = 55 (#x37)
-# Panic Low  = 20 (#x14)
-# Glitch     = 80 (#x50) (If sensor reads > 0.8ml, it's a lie)
-
-# OUTPUT MAP
-# Max Drive  = 100 (#x64)
-# High Drive = 60  (#x3C)
-# Target Amp = 50  (#x32)
-# Low Drive  = 40  (#x28)
-# Stop       = 0   (#x00)
-
+# 2. CONTROL SPECIFICATION
+# ----------------------------------------------------------------------------
 run always (
-    # 1. GLITCH FILTER (Trust Architecture)
-    # If the sensor reads impossibly high (> 0.8ml), ignore it.
-    # Hold the previous piston position.
+    
+    # LAYER 1: THE "TRUST FILTER" (Temporal Debouncing)
+    # PROBLEM: Sensors lie. A spike > 0.8ml (#x50) is physically impossible 
+    # for this motor unless a seal is broken.
+    
     (i1[t] > { #x50 }:bv[8]) ? 
-    (o1[t] = o1[t-1]) :
+    (
+        # CHECK HISTORY: Is this a "Real" failure or just a "Spike"?
+        # If it has been high for 3 consecutive cycles (t, t-1, t-2), it is real.
+        ((i1[t-1] > { #x50 }:bv[8]) && (i1[t-2] > { #x50 }:bv[8])) ?
+        
+        # REAL FAILURE: Emergency Stop.
+        (o1[t] = { #x00 }:bv[8]) :
+        
+        # FAKE SPIKE: Ignore sensor. Hold previous safe output.
+        (o1[t] = o1[t-1])
+    ) :
 
     (
-        # 2. PANIC RECOVERY (System stalled)
-        # If volume is extremely low (< 0.2ml), Kickstart the motor.
+        # LAYER 2: PANIC RECOVERY (Anti-Stall)
+        # If volume is critically low (< 0.20ml / #x14), the system has stalled.
+        # Apply MAX POWER immediately to break static friction.
         (i1[t] < { #x14 }:bv[8]) ? 
         (o1[t] = { #x64 }:bv[8]) :
 
         (
-            # 3. UNDERSHOOT CORRECTION
-            # If Vol < 0.45, increase amplitude to 6.0mm
+            # LAYER 3: DISCRETE CONTROL REGIMES (The "Logic PID")
+            # Instead of calculus, we use discrete bands to govern behavior.
+
+            # UNDERSHOOT BAND (< 0.45ml / #x2D)
+            # Response: High Drive (6.0mm / #x3C)
             (i1[t] < { #x2D }:bv[8]) ? 
             (o1[t] = { #x3C }:bv[8]) : 
 
             (
-                # 4. OVERSHOOT CORRECTION
-                # If Vol > 0.55, decrease amplitude to 4.0mm
+                # OVERSHOOT BAND (> 0.55ml / #x37)
+                # Response: Low Drive (4.0mm / #x28)
                 (i1[t] > { #x37 }:bv[8]) ? 
                 (o1[t] = { #x28 }:bv[8]) :
 
                 (
-                    # 5. STEADY STATE (Cruise Control)
-                    # If between 0.45 and 0.55, hold ideal amplitude (5.0mm)
+                    # CRUISE BAND (0.45 - 0.55ml)
+                    # Response: Ideal Target (5.0mm / #x32)
+                    # We lock the ideal state to prevent micro-jitter.
                     (o1[t] = { #x32 }:bv[8])
                 )
             )

@@ -215,15 +215,15 @@ class TauStudioApp:
         self.ax2.clear()
         
         # Top Plot
-        self.ax1.set_title("Performance: Volume Flow Rate", fontweight='bold')
-        self.ax1.set_ylabel("Volume (ml)")
+        self.ax1.set_title("Performance: Stroke Volume", fontweight='bold')
+        self.ax1.set_ylabel("Stroke (ml)")
         self.ax1.set_xlabel("Time Step") # Added Axis Label
         self.ax1.set_ylim(-0.2, 1.5)
         self.ax1.axhline(y=0.5, color='k', linestyle='--', alpha=0.5)
         self.ax1.grid(True, alpha=0.3)
         
         # Bottom Plot
-        self.ax2.set_title("Controller Output: Piston Travel", fontweight='bold')
+        self.ax2.set_title("Controller Output: Motor Amplitude (mm)", fontweight='bold')
         self.ax2.set_ylabel("Amplitude (mm)")
         self.ax2.set_xlabel("Time Step")
         self.ax2.set_ylim(0, 12)
@@ -277,7 +277,7 @@ class TauStudioApp:
         # Setup Plot 1
         self.ax1.set_xlim(0, steps)
         self.ax1.set_ylim(-0.5, 2.0)
-        self.ax1.set_title("Performance: Volume Flow Rate", fontweight='bold')
+        self.ax1.set_title("Performance: Stroke Volume", fontweight='bold')
         self.ax1.set_ylabel("Volume (ml)")
         self.ax1.set_xlabel("Time Step") # Explicit Axis
         self.ax1.axhline(y=0.5, color='k', linestyle='--', label="Target")
@@ -290,7 +290,7 @@ class TauStudioApp:
         # Setup Plot 2
         self.ax2.set_xlim(0, steps)
         self.ax2.set_ylim(0, 12)
-        self.ax2.set_title("Controller Action: Piston Travel", fontweight='bold')
+        self.ax2.set_title("Controller Action: Motor Amplitude (mm)", fontweight='bold')
         self.ax2.set_ylabel("Amplitude (mm)")
         self.ax2.set_xlabel("Time Step")
         
