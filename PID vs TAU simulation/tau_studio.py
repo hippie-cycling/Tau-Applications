@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, scrolledtext
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.animation import FuncAnimation
@@ -7,237 +7,287 @@ import pandas as pd
 import numpy as np
 import subprocess
 import os
+import threading
+import queue
+import time
 
 # ==============================================================================
-# GLOBAL FONT SETTINGS
+# GLOBAL SETTINGS
 # ==============================================================================
-# Increase Matplotlib font sizes globally
 plt.rcParams.update({
-    'font.size': 11,
-    'axes.titlesize': 14,
-    'axes.labelsize': 12,
-    'xtick.labelsize': 10,
-    'ytick.labelsize': 10,
-    'legend.fontsize': 11,
-    'figure.titlesize': 16
+    'font.size': 11, 'axes.titlesize': 14, 'axes.labelsize': 12,
+    'xtick.labelsize': 10, 'ytick.labelsize': 10, 'legend.fontsize': 11
 })
 
 # ==============================================================================
-# 0. DEFAULT TAU LOGIC
+# 0. ROBUST TAU LOGIC
 # ==============================================================================
-TAU_FILENAME = "controller.tau"
-DEFAULT_TAU_CODE = """
-"""
+# Using a simpler, clearer logic structure to ensure valid syntax.
+# Logic:
+# 1. PANIC: If input < 20, Output = 100 (Max). (Overrides everything)
+# 2. TIMEOUT: If input > 80 for 5 steps, Output = 50 (Cruise).
+# 3. NORMAL: Standard P-Control + Glitch Hold.
 
-def ensure_tau_file():
-    if not os.path.exists(TAU_FILENAME):
-        with open(TAU_FILENAME, "w") as f:
-            f.write(DEFAULT_TAU_CODE.strip())
+TAU_CODE_ONE_LINER = ("set charvar off\ni1 : bv[8] = in console\no1 : bv[8] = out console\nrun always ((i1[t] > { #x50 }:bv[8]) ? (o1[t] = o1[t-1]) : ((i1[t] < { #x14 }:bv[8]) ? (o1[t] = { #x64 }:bv[8]) : (((o1[t-1] = { #x64 }:bv[8]) && (i1[t] < { #x1E }:bv[8])) ? (o1[t] = { #x64 }:bv[8]) : ((i1[t] < { #x2D }:bv[8]) ? (o1[t] = { #x3C }:bv[8]) : ((i1[t] > { #x37 }:bv[8]) ? (o1[t] = { #x28 }:bv[8]) : (o1[t] = { #x32 }:bv[8]))))))\n")
 
 # ==============================================================================
 # 1. PHYSICS & CONTROL CLASSES
 # ==============================================================================
 class PistonPump:
-    def __init__(self):
-        self.amp = 0.0
+    def __init__(self): self.amp = 0.0
     def update(self, target, noise, load):
         self.amp += (target - self.amp) * 0.5
-        vol = (self.amp * 0.1 * load) + noise
-        return max(0, vol)
+        return max(0, (self.amp * 0.1 * load) + noise)
 
 class PID:
     def __init__(self, kp, ki, kd, clamp):
         self.kp, self.ki, self.kd = kp, ki, kd
-        self.clamp = clamp
-        self.prev_err = 0
-        self.integral = 0
-        
+        self.clamp, self.prev_err, self.integral = clamp, 0, 0
     def compute(self, setpoint, measure):
         err = setpoint - measure
         self.integral += err
-        if self.clamp:
-            self.integral = max(-50, min(50, self.integral))
-        
+        if self.clamp: self.integral = max(-50, min(50, self.integral))
         p = self.kp * err
         i = self.ki * self.integral
         d = self.kd * (err - self.prev_err)
         self.prev_err = err
         return p + i + d
 
+# ==============================================================================
+# 2. DEBUG CONSOLE WIDGET
+# ==============================================================================
+class DebugConsole(tk.Frame):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.text = scrolledtext.ScrolledText(self, height=12, bg="black", fg="#00ff00", font=("Consolas", 9))
+        self.text.pack(fill=tk.BOTH, expand=True)
+        self.log(">>> TAU CONSOLE READY")
+
+    def log(self, msg, color=None):
+        tag = "normal"
+        if color == "red":
+            self.text.tag_config("err", foreground="#ff5555")
+            tag = "err"
+        elif color == "cyan":
+            self.text.tag_config("tx", foreground="#55ffff")
+            tag = "tx"
+            
+        self.text.insert(tk.END, msg + "\n", tag)
+        self.text.see(tk.END)
+        # self.text.update_idletasks() # Optional: Un-comment if you want live updates (slower)
+        
+    def clear(self):
+        self.text.delete('1.0', tk.END)
+
+# ==============================================================================
+# 3. TAU INTERFACE (FLIGHT RECORDER MODE)
+# ==============================================================================
 class TauInterface:
     def __init__(self, exe_path):
         self.valid = False
+        self.process = None
+        self.output_queue = queue.Queue()
+        self.stop_event = threading.Event()
+        self.full_log = [] # FLIGHT RECORDER: Stores everything
+        
         if not exe_path or not os.path.exists(exe_path):
+            self.full_log.append("![Sys] Tau executable not found.")
             return
+
         try:
+            # 1. Launch
             self.process = subprocess.Popen(
-                [exe_path],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1
+                [exe_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, bufsize=0
             )
-            with open(TAU_FILENAME, 'r') as f:
-                self.process.stdin.write(f.read() + "\n")
-                self.process.stdin.flush()
-            self.valid = True
+            # Start Reader Thread
+            threading.Thread(target=self._reader_thread, daemon=True).start()
+
+            # 2. Handshake
+            self.full_log.append("![Sys] Waiting for 'tau>' prompt...")
+            if not self._wait_for_log_pattern("tau>", 5.0):
+                self.full_log.append("![Err] Prompt timeout. Is Tau running?")
+                # We continue anyway, sometimes prompt gets eaten.
+
+            # 3. Send Logic
+            self.full_log.append("![Sys] Sending Logic Spec...")
+            self.process.stdin.write(TAU_CODE_ONE_LINER)
+            self.process.stdin.flush()
+            
+            # 4. Wait for Execution Start
+            if self._wait_for_log_pattern(["Execution step", "Please provide"], 10.0):
+                self.valid = True
+                self.full_log.append("![Sys] Logic Accepted. Simulation Started.")
+            else:
+                self.full_log.append("![Err] Logic Rejected (Syntax Error or Timeout).")
+                self.close()
+
         except Exception as e:
-            print(f"Tau Init Error: {e}")
+            self.full_log.append(f"![Exc] Init Error: {e}")
+
+    def _reader_thread(self):
+        """Reads stdout char by char or line by line and stores it."""
+        while not self.stop_event.is_set():
+            try:
+                line = self.process.stdout.readline()
+                if not line: break
+                self.output_queue.put(line)
+            except: break
+
+    def _wait_for_log_pattern(self, patterns, timeout):
+        """Waits for a pattern while recording logs."""
+        if isinstance(patterns, str): patterns = [patterns]
+        start = time.time()
+        while time.time() - start < timeout:
+            try:
+                while not self.output_queue.empty():
+                    line = self.output_queue.get_nowait()
+                    self.full_log.append(f"RX: {line.strip()}") # Record it!
+                    
+                    for p in patterns:
+                        if p in line: return True
+                        
+                    if "error" in line.lower():
+                        self.full_log.append(f"![Tau Error detected]: {line.strip()}")
+            except: pass
+            time.sleep(0.05)
+        return False
 
     def compute(self, measure_vol):
         if not self.valid: return None
         
-        val_int = int(measure_vol * 100)
-        val_int = max(0, min(255, val_int))
+        val_int = max(0, min(255, int(measure_vol * 100)))
         hex_in = f"#x{val_int:02X}\n"
         
         try:
             self.process.stdin.write(hex_in)
             self.process.stdin.flush()
+            self.full_log.append(f"TX: {hex_in.strip()}")
+            
+            # Wait for response
             while True:
-                line = self.process.stdout.readline()
-                if not line: break
-                if "o1[" in line and ":=" in line:
-                    val_part = line.split(":=")[1].strip()
-                    if "#x" in val_part: res = int(val_part.replace("#x",""), 16)
-                    elif "#b" in val_part: res = int(val_part.replace("#b",""), 2)
-                    elif "T" in val_part: res = 1
-                    else: 
-                        try: res = int(val_part)
-                        except: res = 0
-                    return float(res) / 10.0
-        except:
-            return None
-        return None
+                try:
+                    line = self.output_queue.get(timeout=0.2)
+                    self.full_log.append(f"RX: {line.strip()}")
+                    
+                    if "o1[" in line and ":=" in line:
+                        parts = line.split(":=")
+                        val_part = parts[-1].strip()
+                        # Parse Hex/Bin/Dec
+                        if "#x" in val_part: res = int(val_part.replace("#x",""), 16)
+                        elif "#b" in val_part: res = int(val_part.replace("#b",""), 2)
+                        elif "T" in val_part: res = 1
+                        else: 
+                            try: res = int(val_part)
+                            except: res = 0
+                        return float(res) / 10.0
+                except queue.Empty:
+                    if self.process.poll() is not None: return None
+                    continue # Keep waiting
+        except: return None
 
     def close(self):
-        if self.valid:
-            self.process.terminate()
+        self.stop_event.set()
+        if self.process:
+            try:
+                self.full_log.append("![Sys] Sending Quit Command...")
+                self.process.stdin.write("q\n")
+                self.process.stdin.flush()
+                time.sleep(0.2)
+                self.process.terminate()
+            except: pass
+        
+        # Drain remaining logs
+        while not self.output_queue.empty():
+            try: self.full_log.append(f"RX: {self.output_queue.get_nowait().strip()}")
+            except: break
+
+    def get_all_logs(self):
+        return self.full_log
 
 # ==============================================================================
-# 2. GUI APPLICATION
+# 4. GUI APPLICATION
 # ==============================================================================
 class TauStudioApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("Tau Studio: Hardware-in-Loop Simulator")
-        self.root.geometry("1400x900") # Larger window
-        
-        ensure_tau_file()
+        self.root.title("Tau Studio: Playback & Console")
+        self.root.geometry("1400x950")
         self.ani = None
         
-        # --- STYLES ---
         style = ttk.Style()
-        style.configure("TLabel", font=("Arial", 12))
-        style.configure("TButton", font=("Arial", 12, "bold"))
         style.configure("Header.TLabel", font=("Arial", 14, "bold"))
         style.configure("Status.TLabel", font=("Arial", 16, "bold"))
         
-        # --- LEFT PANEL (CONTROLS) ---
+        # --- LEFT PANEL ---
         control_frame = ttk.Frame(root, padding="15")
         control_frame.pack(side=tk.LEFT, fill=tk.Y)
         
-        # 1. Environment
-        ttk.Label(control_frame, text="1. Environment", style="Header.TLabel").pack(pady=10, anchor="w")
-        
+        ttk.Label(control_frame, text="1. Environment", style="Header.TLabel").pack(pady=5, anchor="w")
         self.tau_path = tk.StringVar()
         self.btn_load_tau = ttk.Button(control_frame, text="Locate Tau Executable...", command=self.load_tau_exe)
-        self.btn_load_tau.pack(fill=tk.X, pady=5, ipady=5)
+        self.btn_load_tau.pack(fill=tk.X, pady=5)
+        self.lbl_tau_status = ttk.Label(control_frame, text="Mode: PID ONLY", foreground="red")
+        self.lbl_tau_status.pack(pady=2)
+
+        ttk.Separator(control_frame).pack(fill='x', pady=10)
+
+        ttk.Label(control_frame, text="2. Parameters", style="Header.TLabel").pack(pady=5, anchor="w")
+        self.kp = self.create_input(control_frame, "Kp:", "4.0")
+        self.steps = self.create_input(control_frame, "Duration:", "200")
+        self.glitches = self.create_input(control_frame, "Glitches:", "3")
+        self.speed = self.create_input(control_frame, "Speed (ms):", "20")
+
+        ttk.Separator(control_frame).pack(fill='x', pady=10)
         
-        self.lbl_tau_status = ttk.Label(control_frame, text="Mode: PID ONLY", foreground="red", font=("Arial", 11, "bold"))
-        self.lbl_tau_status.pack(pady=5)
-
-        ttk.Separator(control_frame, orient='horizontal').pack(fill='x', pady=15)
-
-        # 2. PID Tuning
-        ttk.Label(control_frame, text="2. PID Tuning", style="Header.TLabel").pack(pady=10, anchor="w")
-        self.kp = self.create_input(control_frame, "Kp (Prop):", "4.0")
-        self.ki = self.create_input(control_frame, "Ki (Integral):", "0.5")
-        self.kd = self.create_input(control_frame, "Kd (Deriv):", "1.0")
-        
-        self.clamp_var = tk.BooleanVar(value=True)
-        chk = ttk.Checkbutton(control_frame, text="Safety Clamp (Anti-Windup)", variable=self.clamp_var)
-        # Increase Checkbutton text size via style is tricky in tkinter, sticking to default size or hacking it. 
-        # Easier to just pack it cleanly.
-        chk.pack(pady=10)
-
-        ttk.Separator(control_frame, orient='horizontal').pack(fill='x', pady=15)
-
-        # 3. Scenario
-        ttk.Label(control_frame, text="3. Scenario", style="Header.TLabel").pack(pady=10, anchor="w")
-        self.steps = self.create_input(control_frame, "Duration:", "300")
-        self.glitches = self.create_input(control_frame, "Glitches:", "4")
-        self.speed = self.create_input(control_frame, "Speed (ms):", "30")
-
-        ttk.Separator(control_frame, orient='horizontal').pack(fill='x', pady=25)
-        
-        # Buttons
-        self.btn_run = ttk.Button(control_frame, text="▶ START LIVE SIMULATION", command=self.start_animation)
+        self.btn_run = ttk.Button(control_frame, text="▶ COMPUTE & PLAY", command=self.run_scenario)
         self.btn_run.pack(fill=tk.X, ipady=10)
-        
-        self.btn_stop = ttk.Button(control_frame, text="⏹ STOP", command=self.stop_animation)
-        self.btn_stop.pack(fill=tk.X, pady=10)
-        
-        # Status Label (Fixed Width to prevent resizing glitch)
-        self.lbl_status = ttk.Label(control_frame, text="Ready", style="Status.TLabel", width=25, anchor="center")
-        self.lbl_status.pack(pady=30)
+        self.lbl_status = ttk.Label(control_frame, text="Ready", style="Status.TLabel")
+        self.lbl_status.pack(pady=10)
+        self.progress = ttk.Progressbar(control_frame, length=200)
+        self.progress.pack(fill=tk.X)
 
-        # --- RIGHT PANEL (PLOTS) ---
+        # CONSOLE
+        ttk.Separator(control_frame).pack(fill='x', pady=10)
+        ttk.Label(control_frame, text="Tau Execution Logs:", font=("Arial", 10, "bold")).pack(anchor="w")
+        self.console = DebugConsole(control_frame)
+        self.console.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        # --- RIGHT PANEL ---
         plot_frame = ttk.Frame(root)
         plot_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
-        
         self.fig, (self.ax1, self.ax2) = plt.subplots(2, 1, figsize=(10, 8))
-        self.fig.subplots_adjust(hspace=0.4, top=0.9, bottom=0.1) # More space for titles
-        
+        self.fig.subplots_adjust(hspace=0.4, top=0.9, bottom=0.1)
         self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
         self.setup_empty_plots()
 
     def create_input(self, parent, label, default):
         frame = ttk.Frame(parent)
-        frame.pack(fill=tk.X, pady=4)
-        ttk.Label(frame, text=label, width=15).pack(side=tk.LEFT)
-        entry = ttk.Entry(frame, font=("Arial", 11))
+        frame.pack(fill=tk.X, pady=2)
+        ttk.Label(frame, text=label, width=12).pack(side=tk.LEFT)
+        entry = ttk.Entry(frame)
         entry.insert(0, default)
         entry.pack(side=tk.RIGHT, expand=True, fill=tk.X)
         return entry
 
     def load_tau_exe(self):
-        filename = filedialog.askopenfilename(title="Select Tau Executable")
-        if filename:
-            self.tau_path.set(filename)
+        f = filedialog.askopenfilename()
+        if f:
+            self.tau_path.set(f)
             self.lbl_tau_status.config(text="Mode: PID vs TAU", foreground="green")
 
     def setup_empty_plots(self):
-        self.ax1.clear()
-        self.ax2.clear()
-        
-        # Top Plot
-        self.ax1.set_title("Performance: Stroke Volume", fontweight='bold')
-        self.ax1.set_ylabel("Stroke (ml)")
-        self.ax1.set_xlabel("Time Step") # Added Axis Label
-        self.ax1.set_ylim(-0.2, 1.5)
-        self.ax1.axhline(y=0.5, color='k', linestyle='--', alpha=0.5)
+        self.ax1.clear(); self.ax2.clear()
+        self.ax1.set_title("Volume Flow Rate")
         self.ax1.grid(True, alpha=0.3)
-        
-        # Bottom Plot
-        self.ax2.set_title("Controller Output: Motor Amplitude (mm)", fontweight='bold')
-        self.ax2.set_ylabel("Amplitude (mm)")
-        self.ax2.set_xlabel("Time Step")
-        self.ax2.set_ylim(0, 12)
+        self.ax2.set_title("Controller Action")
         self.ax2.grid(True, alpha=0.3)
-        
         self.canvas.draw()
 
     def generate_scenario(self, steps, num_glitches):
         np.random.seed(None)
-        df = pd.DataFrame({
-            'step': range(steps),
-            'noise': np.random.normal(0, 0.01, steps),
-            'load': [1.0] * steps
-        })
+        df = pd.DataFrame({'step': range(steps), 'noise': np.random.normal(0, 0.01, steps), 'load': [1.0] * steps})
         for _ in range(num_glitches):
             t = np.random.randint(30, steps-30)
             kind = np.random.choice(['spike', 'dropout', 'blockage'])
@@ -246,106 +296,104 @@ class TauStudioApp:
             elif kind == 'blockage': df.loc[t:t+40, 'load'] = 0.2
         return df
 
-    def stop_animation(self):
-        if self.ani: self.ani.event_source.stop()
-
-    def start_animation(self):
+    def run_scenario(self):
         try:
             steps = int(self.steps.get())
-            speed = int(self.speed.get())
             n_glitch = int(self.glitches.get())
             kp = float(self.kp.get())
-            ki = float(self.ki.get())
-            kd = float(self.kd.get())
-            clamp = self.clamp_var.get()
+            speed_val = int(self.speed.get())
         except: return
 
+        if self.ani: self.ani.event_source.stop()
+        self.btn_run.config(state="disabled")
+        self.console.clear()
+        self.console.log("--- COMPUTING... ---")
+        self.lbl_status.config(text="Computing...", foreground="blue")
+        self.root.update()
+        
         df = self.generate_scenario(steps, n_glitch)
+        
         plant_pid = PistonPump()
         plant_tau = PistonPump()
-        pid = PID(kp, ki, kd, clamp)
+        pid = PID(kp, 0.5, 1.0, True)
         tau = TauInterface(self.tau_path.get())
         
-        self.amp_pid = 0.0
-        self.amp_tau = 0.0
-        self.x_data, self.pid_v_data, self.tau_v_data = [], [], []
-        self.pid_a_data, self.tau_a_data = [], []
+        amp_pid, amp_tau = 0.0, 0.0
+        
+        self.history = {'x':[], 'pid_v':[], 'tau_v':[], 'pid_a':[], 'tau_a':[], 'status':[]}
+        self.progress['maximum'] = steps
 
-        self.ax1.clear()
-        self.ax2.clear()
-        
-        # Setup Plot 1
-        self.ax1.set_xlim(0, steps)
-        self.ax1.set_ylim(-0.5, 2.0)
-        self.ax1.set_title("Performance: Stroke Volume", fontweight='bold')
-        self.ax1.set_ylabel("Volume (ml)")
-        self.ax1.set_xlabel("Time Step") # Explicit Axis
-        self.ax1.axhline(y=0.5, color='k', linestyle='--', label="Target")
-        
-        line_pid_v, = self.ax1.plot([], [], 'r-', alpha=0.8, lw=2, label="PID")
-        line_tau_v, = self.ax1.plot([], [], 'b-', alpha=0.9, lw=2.5, label="Tau")
-        self.ax1.legend(loc="upper right", frameon=True)
+        for i in range(steps):
+            self.progress['value'] = i
+            # Update GUI every 10 steps to stay responsive but fast
+            if i % 10 == 0: self.root.update()
+            
+            row = df.iloc[i]
+            
+            # PID
+            m_p = plant_pid.update(amp_pid, row['noise'], row['load'])
+            amp_pid = max(0, min(10, amp_pid + pid.compute(0.5, m_p)))
+            
+            # Tau
+            m_t = plant_tau.update(amp_tau, row['noise'], row['load'])
+            tgt = tau.compute(m_t)
+            
+            # If Tau is valid, update. If not (flatline issue), keep 0.
+            if tgt is not None: amp_tau = tgt
+            
+            self.history['x'].append(i)
+            self.history['pid_v'].append(m_p)
+            self.history['tau_v'].append(m_t)
+            self.history['pid_a'].append(amp_pid)
+            self.history['tau_a'].append(amp_tau)
+            
+            st = "Normal"
+            if abs(row['noise']) > 0.5: st = "GLITCH"
+            elif row['load'] < 0.9: st = "BLOCKAGE"
+            self.history['status'].append(st)
+
+        # DUMP LOGS at the end
+        logs = tau.get_all_logs()
+        for l in logs:
+            col = "cyan" if "TX" in l else "red" if "Err" in l else None
+            self.console.log(l, col)
+
+        tau.close()
+        self.lbl_status.config(text="Playing...", foreground="green")
+        self.btn_run.config(state="normal")
+        self.play_animation(steps, speed_val)
+
+    def play_animation(self, steps, speed):
+        self.ax1.clear(); self.ax2.clear()
+        self.ax1.set_xlim(0, steps); self.ax1.set_ylim(-0.5, 2.0)
+        self.ax1.set_title("Playback: Volume Flow Rate")
+        self.ax1.axhline(0.5, color='k', ls='--')
+        l_pid_v, = self.ax1.plot([], [], 'r-', label="PID")
+        l_tau_v, = self.ax1.plot([], [], 'b-', label="Tau")
+        self.ax1.legend()
         self.ax1.grid(True, alpha=0.3)
         
-        # Setup Plot 2
-        self.ax2.set_xlim(0, steps)
-        self.ax2.set_ylim(0, 12)
-        self.ax2.set_title("Controller Action: Motor Amplitude (mm)", fontweight='bold')
-        self.ax2.set_ylabel("Amplitude (mm)")
-        self.ax2.set_xlabel("Time Step")
-        
-        line_pid_a, = self.ax2.plot([], [], 'r-', alpha=0.5, lw=1.5, label="PID Amp")
-        line_tau_a, = self.ax2.plot([], [], 'b-', alpha=0.5, lw=1.5, label="Tau Amp")
-        self.ax2.legend(loc="upper right", frameon=True)
+        self.ax2.set_xlim(0, steps); self.ax2.set_ylim(0, 12)
+        self.ax2.set_title("Controller Action")
+        l_pid_a, = self.ax2.plot([], [], 'r-', alpha=0.5)
+        l_tau_a, = self.ax2.plot([], [], 'b-', alpha=0.5)
         self.ax2.grid(True, alpha=0.3)
 
-        def update(frame):
-            if frame >= steps: 
-                self.stop_animation()
-                tau.close()
-                return
+        def update(f):
+            x = self.history['x'][:f]
+            l_pid_v.set_data(x, self.history['pid_v'][:f])
+            l_tau_v.set_data(x, self.history['tau_v'][:f])
+            l_pid_a.set_data(x, self.history['pid_a'][:f])
+            l_tau_a.set_data(x, self.history['tau_a'][:f])
+            
+            st = self.history['status'][f]
+            if st == "GLITCH": self.lbl_status.config(text="⚠️ GLITCH", foreground="red")
+            elif st == "BLOCKAGE": self.lbl_status.config(text="⚠️ BLOCKAGE", foreground="orange")
+            else: self.lbl_status.config(text=f"Step {f}/{steps}", foreground="black")
+            
+            return l_pid_v, l_tau_v, l_pid_a, l_tau_a
 
-            row = df.iloc[frame]
-            noise = row['noise']
-            load = row['load']
-            
-            # Physics
-            meas_p = plant_pid.update(self.amp_pid, noise, load)
-            adj = pid.compute(0.5, meas_p)
-            self.amp_pid += adj
-            self.amp_pid = max(0, min(10, self.amp_pid))
-            
-            meas_t = plant_tau.update(self.amp_tau, noise, load)
-            tgt = tau.compute(meas_t)
-            
-            if tgt is not None:
-                self.amp_tau = tgt
-                self.tau_v_data.append(meas_t)
-                self.tau_a_data.append(self.amp_tau)
-            else:
-                self.tau_v_data.append(None)
-                self.tau_a_data.append(None)
-            
-            self.x_data.append(frame)
-            self.pid_v_data.append(meas_p)
-            self.pid_a_data.append(self.amp_pid)
-            
-            line_pid_v.set_data(self.x_data, self.pid_v_data)
-            line_tau_v.set_data(self.x_data, self.tau_v_data)
-            line_pid_a.set_data(self.x_data, self.pid_a_data)
-            line_tau_a.set_data(self.x_data, self.tau_a_data)
-            
-            if abs(noise) > 0.5:
-                self.lbl_status.config(text="⚠️ SENSOR GLITCH", foreground="red")
-            elif load < 0.9:
-                self.lbl_status.config(text="⚠️ LOAD SPIKE", foreground="orange")
-            else:
-                self.lbl_status.config(text=f"Step {frame}/{steps}", foreground="black")
-
-            return line_pid_v, line_tau_v, line_pid_a, line_tau_a
-
-        self.ani = FuncAnimation(self.fig, update, frames=range(steps+1), 
-                                 interval=speed, blit=False, repeat=False)
+        self.ani = FuncAnimation(self.fig, update, frames=range(steps), interval=speed, blit=False, repeat=False)
         self.canvas.draw()
 
 if __name__ == "__main__":
