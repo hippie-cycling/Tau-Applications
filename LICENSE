@@ -21,7 +21,7 @@ This software uses Tau Language under IDNI's license. All rights to Tau Language
 remain with IDNI AG.
 
 ================================================================================
-RESTRICTION: PURE LOGIC CONTROL TECHNOLOGY
+RESTRICTION: PURE LOGIC CONTROL TECHNOLOGY (Solver-Based Control Architecture)
 ================================================================================
 
 COMMERCIAL USE OF THE FOLLOWING IS PROHIBITED without explicit written license:
@@ -29,57 +29,62 @@ COMMERCIAL USE OF THE FOLLOWING IS PROHIBITED without explicit written license:
 "Pure Logic Control Technology" means the SPECIFIC ARCHITECTURAL COMBINATION of
 the following innovations:
 
-1. DISCRETE REGIME CONTROL ARCHITECTURE
-   Replacing continuous calculus-based control terms (Proportional/Derivative)
-   with discrete nested logical states (e.g., Panic, Brake, Nudge, Cruise)
-   defined by bitvector thresholds within a satisfiability solver.
+1. DECLARATIVE STATE GOVERNANCE
+   The method of controlling system outputs by defining "Valid States" via
+   bitvector constraints within a satisfiability solver, rather than by
+   executing imperative instruction loops (e.g., scan cycles).
 
-2. TEMPORAL VELOCITY DETECTION
-   Replacing mathematical derivatives (dx/dt) with native temporal lookups
-   (x[t] - x[t-1]) within a logic solver to determine system momentum and
-   trigger pre-emptive braking states without floating-point arithmetic.
+2. GEOMETRIC TEMPORAL CONTROL
+   The use of native temporal indexing (e.g., x[t] vs x[t-n]) within a logic
+   solver to strictly define valid physical transitions and history-dependent
+   behavior without the use of memory registers, timers, or accumulators.
 
-3. LOGIC-BASED INTEGRAL REPLACEMENT ("ANTI-WINDUP LOGIC")
-   Replacing the mathematical Integral term with a "Stiction Detection" logic
-   trap (Logic: If Error > 0 AND Position == Previous_Position THEN Nudge) to
-   eliminate integral windup and overshoot without historical accumulation.
+3. LOGICAL INVARIANT ENFORCEMENT ("The Unbreakable Guard")
+   The architecture of embedding high-priority safety constraints into the
+   control logic such that unsafe physical states are rendered mathematically
+   unsatisfiable (UNSAT) by the solver, preventing conflicting control signals.
 
-4. THE "TRUST FILTER" SIGNAL PROCESSING ARCHITECTURE
-   The specific method of using logical satisfiability to reject sensor noise
-   based on physical impossibility (e.g., "Change > X in 1 step is False")
-   rather than frequency filtering or averaging.
+4. SATISFIABILITY-BASED SIGNAL FILTERING
+   The method of filtering sensor input by defining logical plausibility
+   constraints (e.g., "Physics forbids change > X") and using the solver to
+   reject data that violates these constraints.
 
-5. FORMALLY VERIFIED SAFETY GUARDS
-   The architecture of embedding safety constraints (e.g., MaxTemp) directly
-   into the control loop such that unsafe states are mathematically unsatisfiable
-   (UNSAT) within the solver.
+5. DISCRETE RESOLUTION OF CONTINUOUS DYNAMICS
+   The method of mapping continuous error ranges to discrete logical regimes
+   (e.g., "Panic", "Hold", "Recover") via logical implication rules, enabling
+   complex non-linear control response without floating-point arithmetic.
 
-EXPLICITLY EXCLUDED FROM THIS LICENSE (Prior Art / Third-Party IP):
+================================================================================
+EXPLICITLY EXCLUDED FROM THIS LICENSE (Prior Art / Third-Party IP)
+================================================================================
 
-✗ Standard PID Controllers (Calculus-based Proportional-Integral-Derivative)
-✗ Fuzzy Logic Controllers (standard prior art)
-✗ Programmable Logic Controllers (standard Ladder Logic)
-✗ Tau Language itself and all IDNI intellectual property (separate license)
-✗ Generic constraint solving techniques (prior art)
-✗ Kalman Filters or standard signal processing
-✗ SAT/SMT solving in general (prior art)
+The following are NOT protected and remain open:
 
-WHAT IS ACTUALLY PROTECTED:
+✗ Standard Imperative Programming (C++, Python loops)
+✗ Standard Programmable Logic Controllers (Scan-based Ladder Logic)
+✗ Standard FPGA/Hardware Description Languages (Verilog/VHDL)
+✗ Tau Language itself and all IDNI intellectual property
+✗ Generic constraint solving algorithms (e.g., Z3, CVC5 mechanics)
+✗ Standard PID or Fuzzy Logic mathematical theories
 
-✓ The specific architectural combination of the control innovations listed above
-✓ The "Deadbeat" logic controller design using temporal braking
-✓ The "Nudge" logic design replacing the Integral term
-✓ The interactive runner mode discoveries for real-time control
-✓ The specific Tau Language formulas and specifications developed for control
-✓ The specific integration of temporal logic solvers into feedback loops
+================================================================================
+WHAT IS ACTUALLY PROTECTED
+================================================================================
 
-PROHIBITED COMMERCIAL USES (without license):
+✓ The architecture of replacing "Execution Loops" with "Logic Solvers" for control
+✓ The specific method of using "UNSAT" as a safety mechanism in control loops
+✓ The "Deadbeat" and "Stiction" logic patterns implemented via temporal logic
+✓ The integration of a SAT/SMT solver directly into a real-time feedback loop
+✓ The specific Tau specifications developed for physical state governance
 
-- Manufacturing or selling industrial controllers using this architecture
-- Integration into HVAC, automotive, or aerospace control systems
-- Providing "Logic-Based Control" as a commercial software service
-- White-label control solutions using the protected architectural innovations
-- Any revenue-generating deployment of the specific technological combination
+================================================================================
+PATENT NOTICE - UPDATED CLAIMS
+================================================================================
+
+The licensor reserves patent rights to the SPECIFIC ARCHITECTURAL INNOVATION of:
+✓ Governing physical actuators via real-time satisfiability solving
+✓ Replacing imperative safety checks with declarative logical invariants
+✓ The method of geometric temporal indexing for physical state estimation
 
 This restriction applies ONLY to the specific "Pure Logic Control Technology"
 as defined above. All other uses remain unrestricted under MIT terms.
@@ -131,15 +136,6 @@ PATENT NOTICE
 
 The licensor reserves all patent rights to the SPECIFIC ARCHITECTURAL COMBINATION
 of logic-based control innovations described above.
-
-CLARIFICATION - PATENT CLAIMS:
-
-The licensor claims patent rights ONLY to:
-✓ The specific discrete regime control architecture
-✓ The temporal velocity detection method within logic solvers
-✓ The logic-based "Anti-Windup" integral replacement
-✓ The "Trust Filter" signal processing architecture
-✓ The combination and integration of these techniques
 
 The licensor does NOT claim patent rights to:
 ✗ Standard PID control theory (prior art)
