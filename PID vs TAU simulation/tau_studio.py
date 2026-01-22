@@ -20,15 +20,49 @@ plt.rcParams.update({
 })
 
 # ==============================================================================
-# 0. ROBUST TAU LOGIC
+# 0. ROBUST TAU LOGIC - BASIC IMPLEMENTATION FOR NOW
 # ==============================================================================
-# Using a simpler, clearer logic structure to ensure valid syntax.
-# Logic:
-# 1. PANIC: If input < 20, Output = 100 (Max). (Overrides everything)
-# 2. TIMEOUT: If input > 80 for 5 steps, Output = 50 (Cruise).
-# 3. NORMAL: Standard P-Control + Glitch Hold.
 
 TAU_CODE_ONE_LINER = ("set charvar off\ni1 : bv[8] = in console\no1 : bv[8] = out console\nrun always ((i1[t] > { #x50 }:bv[8]) ? (o1[t] = o1[t-1]) : ((i1[t] < { #x14 }:bv[8]) ? (o1[t] = { #x64 }:bv[8]) : (((o1[t-1] = { #x64 }:bv[8]) && (i1[t] < { #x1E }:bv[8])) ? (o1[t] = { #x64 }:bv[8]) : ((i1[t] < { #x2D }:bv[8]) ? (o1[t] = { #x3C }:bv[8]) : ((i1[t] > { #x37 }:bv[8]) ? (o1[t] = { #x28 }:bv[8]) : (o1[t] = { #x32 }:bv[8]))))))\n")
+
+# ==============================================================================
+# 0. ROBUST TAU LOGIC (SCALED FOR INT(VOL * 100))
+# Target = 0.5 Flow -> Input 50 (0x32)
+# ==============================================================================
+
+## To be tested, currently not in use.
+
+# TAU_CODE_ONE_LINER = (
+#     "set charvar off\n"
+#     "i1 : bv[8] = in console\n"
+#     "o1 : bv[8] = out console\n"
+#     "run always ("
+#     # LAYER 1: FAULT PROTECTION
+#     # If Input > 1.1 (0x6E) and history was normal (< 0.7 / 0x46), ignore glitch.
+#     "((i1[t] > { #x6E }:bv[8]) && (i1[t-1] < { #x46 }:bv[8])) ? (o1[t] = o1[t-1]) : "
+    
+#     # LAYER 2: DEADBAND (STABILITY)
+#     # If Input is 0.48 - 0.52 (0x30 - 0x34), hold steady power (0x32).
+#     "((i1[t] >= { #x30 }:bv[8]) && (i1[t] <= { #x34 }:bv[8])) ? (o1[t] = { #x32 }:bv[8]) : "
+    
+#     # LAYER 3: CRITICAL RESPONSE
+#     # > 0.8 (0x50) -> Cut Power (0x00)
+#     "(i1[t] > { #x50 }:bv[8]) ? (o1[t] = { #x00 }:bv[8]) : "
+    
+#     # > 0.6 (0x3C) -> Low Power (0x19 / 25)
+#     "(i1[t] > { #x3C }:bv[8]) ? (o1[t] = { #x19 }:bv[8]) : "
+    
+#     # < 0.2 (0x14) -> Max Power (0x64 / 100)
+#     "(i1[t] < { #x14 }:bv[8]) ? (o1[t] = { #x64 }:bv[8]) : "
+    
+#     # < 0.4 (0x28) -> High Power (0x4B / 75)
+#     "(i1[t] < { #x28 }:bv[8]) ? (o1[t] = { #x4B }:bv[8]) : "
+    
+#     # DEFAULT: Neutral/Maintenance Power (0x32 / 50)
+#     "(o1[t] = { #x32 }:bv[8])"
+#     ")\n"
+# )
+
 
 # ==============================================================================
 # 1. PHYSICS & CONTROL CLASSES

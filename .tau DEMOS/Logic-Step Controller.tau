@@ -1,125 +1,46 @@
-# ============================================================================
-# PURE LOGIC TEMPERATURE CONTROLLER
-# Logic-based PID replacement using Tau-Language
-# ============================================================================
-
 set charvar off
 
-# 1. STREAM DEFINITIONS
-# We use 8-bit bitvectors (0-255) for temperature and power.
-# ----------------------------------------------------------------------------
-i1 : bv[8] = in console   # Sensor Input
-o1 : bv[8] = out console  # Heater Output
-
-# 2. THE CONTROL LOGIC
-# ----------------------------------------------------------------------------
-# LOGIC MAP:
-# < 32 (#x20) ....... Panic Heat (100 / #x64)
-# > 35 (#x23) ....... Check for Braking
-# = 36 (#x24) ....... Check for Stiction (Nudge)
-# >= 37 (#x25) ...... Over-temp Cutoff (0 / #x00)
-# Else .............. Standard Approach (50 / #x32)
+i1 : bv[8] = in console
+o1 : bv[8] = out console
 
 run always (
-    # REGIME 1: COLD START (Temp < 32)
-    # Note the structure: (Condition) ? (Assignment A) : (Next Check)
-    (i1[t] < { #x20 }:bv[8]) ? (o1[t] = { #x64 }:bv[8]) :
-    (
-        # REGIME 2: PRE-EMPTIVE BRAKING
-        # If Temp between 35-37 AND Rising Fast (> 2 degrees per step)
-        ((i1[t] >= { #x23 }:bv[8]) && (i1[t] < { #x25 }:bv[8]) && (i1[t] > (i1[t-1] + { #x02 }:bv[8]))) ? 
-        (o1[t] = { #x00 }:bv[8]) :
-        (
-            # REGIME 3: SUSTAIN NUDGE
-            # If Temp is exactly 36 AND has not changed since last step (Stuck)
-            # Note: Using '=' for equality check, matching your snippets
-            ((i1[t] = { #x24 }:bv[8]) && (i1[t] = i1[t-1])) ? 
-            (o1[t] = { #x0F }:bv[8]) :
-            (
-                # REGIME 4: TARGET REACHED / OVERSHOOT
-                # If Temp >= 37, Cut Power
-                (i1[t] >= { #x25 }:bv[8]) ? (o1[t] = { #x00 }:bv[8]) :
-                
-                # REGIME 5: STANDARD APPROACH (Default)
-                (o1[t] = { #x32 }:bv[8])
-            )
-        )
-    )
+    // LAYER 1: FAULT & NOISE REJECTION
+    // If the current input is a massive spike (Critical High > 0xE0)
+    // but the previous two readings were normal/low (< 0xA0), ignore it as a glitch/sensor fault.
+    // ACTION: Maintain previous output.
+    ((i1[t] > { #xE0 }:bv[8]) && (i1[t-1] < { #xA0 }:bv[8]) && (i1[t-2] < { #xA0 }:bv[8])) ? 
+        (o1[t] = o1[t-1]) :
+
+    // LAYER 2: DEADBAND (STABILITY)
+    // If input is within +/- 5% of 0.5 (Range 0x78 to 0x88), 
+    // force output to neutral (0x80) to stop "hunting".
+    ((i1[t] >= { #x78 }:bv[8]) && (i1[t] <= { #x88 }:bv[8])) ? 
+        (o1[t] = { #x80 }:bv[8]) :
+
+    // LAYER 3: OVERSHOOT PROTECTION (SOFT LANDING)
+    // If we are below target (< 0x78) BUT signal is rising (i1[t] > i1[t-1]),
+    // don't apply full power. Apply "Soft High" (0xA0) instead of "Hard High".
+    ((i1[t] < { #x78 }:bv[8]) && (i1[t] > i1[t-1])) ? 
+        (o1[t] = { #xA0 }:bv[8]) :
+
+    // LAYER 4: UNDERSHOOT PROTECTION (SOFT LANDING)
+    // If we are above target (> 0x88) BUT signal is falling (i1[t] < i1[t-1]),
+    // don't cut power completely. Apply "Soft Low" (0x60).
+    ((i1[t] > { #x88 }:bv[8]) && (i1[t] < i1[t-1])) ? 
+        (o1[t] = { #x60 }:bv[8]) :
+
+    // LAYER 5: PROPORTIONAL ZONES (CORE LOGIC)
+    
+    // Critical High (> 0xC8 / 200): Cut Output to 0
+    (i1[t] > { #xC8 }:bv[8]) ? (o1[t] = { #x00 }:bv[8]) :
+    
+    // Standard High (> 0x96 / 150): Low Output (Cooling)
+    (i1[t] > { #x96 }:bv[8]) ? (o1[t] = { #x40 }:bv[8]) :
+    
+    // Critical Low (< 0x32 / 50): Max Output
+    (i1[t] < { #x32 }:bv[8]) ? (o1[t] = { #xFF }:bv[8]) :
+    
+    // Standard Low (< 0x78 / 120): High Output (Heating)
+    // Default fallback
+    (o1[t] = { #xC0 }:bv[8])
 )
-
-
-# 1. IT REPLACES "GUESSWORK" WITH "DECISIONS"
-# ----------------------------------------------------------------------------
-# A standard PID Controller (used in everything from your thermostat to cruise
-# control) works by balancing a mathematical equation. To make it work,
-# engineers have to "tune" these numbers (P, I, D) through trial and error.
-# If they get it wrong, the system oscillates or becomes unstable.
-#
-# Why this Tau code is better: It uses Discrete Regimes. It doesn't "calculate"
-# the power; it DECIDES the state.
-#
-# Instead of multiplying error by a floating-point number (which is slow and
-# approximate), it says: "If I am approaching fast (Regime 2), cut the power."
-#
-# This creates a Deadbeat Controller—a system that hits the target and stops
-# dead, without the oscillation common in PID loops.
-
-# 2. NATIVE "TIME TRAVEL" (TEMPORAL LOGIC)
-# ----------------------------------------------------------------------------
-# In C++ or Python, if you want to know what happened "a moment ago," you
-# have to manually create variables like previous_temp, update them every
-# loop, and ensure they don't get corrupted.
-#
-# In this code, look at Regime 2: (i1[t] > (i1[t-1] + { #x02 }:bv[8]))
-#
-# This line natively checks the velocity of the temperature change by looking
-# directly into the past (t-1).
-#
-# Impressive Factor: The language treats Time as just another dimension you can
-# index, like an array. You don't manage the state; the language manages the state.
-
-# 3. IT IS MATHEMATICALLY PROVABLE (SAFETY)
-# ----------------------------------------------------------------------------
-# This is the "Holy Grail" for critical systems (medical devices, nuclear
-# power, spacecraft).
-#
-# Standard Code: You hope your if/else statements cover every edge case.
-#
-# Tau Code: Because this is written in a Logic Language, you can run a Solver
-# against it.
-#
-# You can ask the Tau engine: "Is there ANY sequence of inputs that results
-# in the heater being ON when the temperature is > 40?" The solver will
-# return UNSAT (Unsatisfiable), mathematically proving that it is impossible
-# for this code to overheat, regardless of sensor glitches or weird timing.
-# You cannot do this with a C++ PID controller.
-
-# 4. ZERO FLOATING-POINT OVERHEAD (EFFICIENCY)
-# ----------------------------------------------------------------------------
-# Notice the type definitions: bv[8].
-#
-# This code uses 8-bit BitVectors (integers 0-255).
-#
-# Standard PIDs require Floating Point Math (decimals), which is
-# computationally heavy and requires complex processors.
-#
-# Impressive Factor: This sophisticated control logic could run on a processor
-# that costs pennies (or even directly on an FPGA chip), because it requires
-# zero decimal math.
-
-# 5. IT SOLVES "INTEGRAL WINDUP" WITHOUT MATH
-# ----------------------------------------------------------------------------
-# One of the hardest things to fix in a PID is "Integral Windup"—where the
-# controller "remembers" that it was cold for a long time and keeps the
-# heater on even after it gets hot.
-#
-# Look at Regime 3 (Sustain Nudge): ((i1[t] = { #x24 }:bv[8]) && (i1[t] = i1[t-1]))
-#
-# This replaces the "Integral" term with a Logic Trap:
-# "Am I at 36 degrees?" AND "Did I fail to move since last step?"
-#
-# If YES -> Apply Nudge.
-# If NO (temperature moves even a tiny bit) -> Stop Nudge.
-#
-# It solves the physical problem of "stiction" (getting stuck near the target)
-# without accumulating any dangerous history that causes overshoot.
