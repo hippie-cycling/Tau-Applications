@@ -20,7 +20,7 @@ plt.rcParams.update({
 })
 
 # ==============================================================================
-# 0. ROBUST TAU LOGIC - BASIC IMPLEMENTATION FOR NOW
+# 0. ROBUST TAU LOGIC
 # ==============================================================================
 
 TAU_CODE_ONE_LINER = ("set charvar off\ni1 : bv[8] = in console\no1 : bv[8] = out console\nrun always ((i1[t] > { #x50 }:bv[8]) ? (o1[t] = o1[t-1]) : ((i1[t] < { #x14 }:bv[8]) ? (o1[t] = { #x64 }:bv[8]) : (((o1[t-1] = { #x64 }:bv[8]) && (i1[t] < { #x1E }:bv[8])) ? (o1[t] = { #x64 }:bv[8]) : ((i1[t] < { #x2D }:bv[8]) ? (o1[t] = { #x3C }:bv[8]) : ((i1[t] > { #x37 }:bv[8]) ? (o1[t] = { #x28 }:bv[8]) : (o1[t] = { #x32 }:bv[8]))))))\n")
@@ -30,7 +30,7 @@ TAU_CODE_ONE_LINER = ("set charvar off\ni1 : bv[8] = in console\no1 : bv[8] = ou
 # Target = 0.5 Flow -> Input 50 (0x32)
 # ==============================================================================
 
-## To be tested, currently not in use.
+## To be tested,
 
 # TAU_CODE_ONE_LINER = (
 #     "set charvar off\n"

@@ -1,0 +1,43 @@
+set charvar off
+
+# i1 = Current Measurement (Process Variable)
+# i2 = Target Setpoint (User Defined)
+i1 : bv[8] = in console
+i2 : bv[8] = in console
+o1 : bv[8] = out console
+
+run always (
+    # DEFINITIONS (Conceptual, realized in logic below)
+    # Target = i2[t]
+    # Deadband = Target +/- 4 (approx 0x04)
+    # Critical High = Target + 50 (0x32)
+    # Critical Low = Target - 30 (0x1E)
+
+    # LAYER 1: FAULT PROTECTION
+    # If Input is drastically higher than Target + 80 (Safety Limit)
+    # AND history was near Target, ignore it.
+    ((i1[t] > (i2[t] + { #x50 }:bv[8])) && (i1[t-1] < (i2[t] + { #x10 }:bv[8]))) ? 
+        (o1[t] = o1[t-1]) : 
+
+    # LAYER 2: DEADBAND (STABILITY)
+    # If Input is within Target +/- 4
+    # Note: BV logic for Range: (i1 >= Target - 4) AND (i1 <= Target + 4)
+    ((i1[t] >= (i2[t] - { #x04 }:bv[8])) && (i1[t] <= (i2[t] + { #x04 }:bv[8]))) ? 
+        (o1[t] = { #x32 }:bv[8]) :  # Neutral output (Maintenance power)
+
+    # LAYER 3: CRITICAL RESPONSE
+    # If Input > Target + 40 -> Cut Power
+    (i1[t] > (i2[t] + { #x28 }:bv[8])) ? (o1[t] = { #x00 }:bv[8]) :
+
+    # If Input > Target + 20 -> Low Power
+    (i1[t] > (i2[t] + { #x14 }:bv[8])) ? (o1[t] = { #x19 }:bv[8]) :
+
+    # If Input < Target - 30 -> Max Power
+    (i1[t] < (i2[t] - { #x1E }:bv[8])) ? (o1[t] = { #x64 }:bv[8]) :
+
+    # If Input < Target - 10 -> High Power
+    (i1[t] < (i2[t] - { #x0A }:bv[8])) ? (o1[t] = { #x4B }:bv[8]) :
+
+    # DEFAULT: Neutral
+    (o1[t] = { #x32 }:bv[8])
+)
