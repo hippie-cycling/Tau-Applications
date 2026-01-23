@@ -10,23 +10,29 @@ import os
 import threading
 import queue
 import time
+import re
 
 # ==============================================================================
 # 0. ROBUST TAU LOGIC (Dynamic Target)
 # ==============================================================================
+# LEVEL 6: TUNED CONTROLLER (Physics-Correct)
+# Neutral Power adjusted to 25 (#x19) to maintain 0.5 Flow.
+# Gaps closed to prevent "coasting".
+
+# LEVEL 6: TUNED CONTROLLER (Physics-Correct)
 TAU_CODE_ONE_LINER = (
     "set charvar off\n"
     "i1 : bv[8] = in console\n"
     "i2 : bv[8] = in console\n"
     "o1 : bv[8] = out console\n"
     "run always ("
-    "((i1[t] > (i2[t] + { #x3C }:bv[8])) && (i1[t-1] < (i2[t] + { #x14 }:bv[8]))) ? (o1[t] = o1[t-1]) : "
-    "((i1[t] >= (i2[t] - { #x04 }:bv[8])) && (i1[t] <= (i2[t] + { #x04 }:bv[8]))) ? (o1[t] = { #x32 }:bv[8]) : "
+    "((i1[t] > (i2[t] + { #x3C }:bv[8]))) ? (o1[t] = o1[t-1]) : "
+    "((i1[t] >= (i2[t] - { #x04 }:bv[8])) && (i1[t] <= (i2[t] + { #x04 }:bv[8]))) ? (o1[t] = { #x19 }:bv[8]) : "
     "(i1[t] > (i2[t] + { #x28 }:bv[8])) ? (o1[t] = { #x00 }:bv[8]) : "
-    "(i1[t] > (i2[t] + { #x14 }:bv[8])) ? (o1[t] = { #x19 }:bv[8]) : "
+    "(i1[t] > (i2[t] + { #x0A }:bv[8])) ? (o1[t] = { #x0A }:bv[8]) : "
     "(i1[t] < (i2[t] - { #x1E }:bv[8])) ? (o1[t] = { #x64 }:bv[8]) : "
-    "(i1[t] < (i2[t] - { #x0A }:bv[8])) ? (o1[t] = { #x4B }:bv[8]) : "
-    "(o1[t] = { #x32 }:bv[8])"
+    "(i1[t] < (i2[t] - { #x0A }:bv[8])) ? (o1[t] = { #x32 }:bv[8]) : "
+    "(o1[t] = { #x19 }:bv[8])"
     ")\n"
 )
 
@@ -89,8 +95,9 @@ class DebugConsole(tk.Frame):
     def clear(self):
         self.text.delete('1.0', tk.END)
 
+
 # ==============================================================================
-# 3. TAU INTERFACE (With Live Logger)
+# 3. TAU INTERFACE (REGEX HARDENED)
 # ==============================================================================
 class TauInterface:
     def __init__(self, exe_path, logger_callback=None):
@@ -106,28 +113,34 @@ class TauInterface:
 
         try:
             self.process = subprocess.Popen(
-                [exe_path], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                [exe_path], 
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, text=True, bufsize=0
             )
-            threading.Thread(target=self._reader_thread, daemon=True).start()
+            
+            threading.Thread(target=self._stdout_reader, daemon=True).start()
+            threading.Thread(target=self._stderr_reader, daemon=True).start()
 
-            if self.logger: self.logger("![Sys] Init...", "yellow")
-            if not self._wait_for_log_pattern("tau>", 5.0):
-                if self.logger: self.logger("![Err] Prompt timeout.", "red")
+            if self.logger: self.logger("![Sys] Initializing...", "yellow")
+
+            # Initial handshake
+            if not self._wait_for_regex(r"tau>", 5.0):
+                 if self.logger: self.logger("![Warn] Prompt check skipped...", "yellow")
 
             self.process.stdin.write(TAU_CODE_ONE_LINER)
             self.process.stdin.flush()
             
-            if self._wait_for_log_pattern(["Execution step", "Please provide"], 10.0):
+            if self._wait_for_regex(r"Execution step|Please provide", 20.0):
                 self.valid = True
                 if self.logger: self.logger("![Sys] Logic Accepted.", "green")
             else:
-                self.close()
+                self.valid = False
+                if self.logger: self.logger("![Err] Logic Rejected.", "red")
 
         except Exception as e:
             if self.logger: self.logger(f"![Exc] {e}", "red")
 
-    def _reader_thread(self):
+    def _stdout_reader(self):
         while not self.stop_event.is_set():
             try:
                 char = self.process.stdout.read(1)
@@ -135,68 +148,103 @@ class TauInterface:
                 self.output_queue.put(char)
             except: break
 
-    def _read_until_prompt(self, timeout=0.5):
-        buffer = ""
-        start = time.time()
-        while time.time() - start < timeout:
-            while not self.output_queue.empty():
-                buffer += self.output_queue.get()
-            if ":=" in buffer or "o1[" in buffer: return buffer
-            time.sleep(0.005)
-        return buffer
+    def _stderr_reader(self):
+        while not self.stop_event.is_set():
+            try:
+                line = self.process.stderr.readline()
+                if not line: break
+                # Only log unexpected errors
+                if "Error" in line or "fail" in line:
+                    if self.logger: self.logger(f"[LOG] {line.strip()}", "yellow")
+            except: break
 
-    def _wait_for_log_pattern(self, patterns, timeout):
-        if isinstance(patterns, str): patterns = [patterns]
-        buffer = ""
+    def _clean_text(self, text):
+        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+        return ansi_escape.sub('', text)
+
+    def _wait_for_regex(self, pattern, timeout):
         start = time.time()
+        buffer = ""
         while time.time() - start < timeout:
             while not self.output_queue.empty():
                 buffer += self.output_queue.get()
-            for p in patterns:
-                if p in buffer: return True
+            if re.search(pattern, self._clean_text(buffer)): return True
             time.sleep(0.05)
         return False
+
+    def _read_until_token(self, token, timeout=0.5):
+        """Waits until a specific string appears in the buffer."""
+        buffer = ""
+        start = time.time()
+        while time.time() - start < timeout:
+            while not self.output_queue.empty():
+                buffer += self.output_queue.get()
+            if token in self._clean_text(buffer): return buffer
+            time.sleep(0.001)
+        return buffer
 
     def compute(self, measure_vol, target_vol):
         if not self.valid: return None
         
+        # 1. Format Inputs (Strict Bitvector Hex)
+        # ensure we send integer hex (e.g. #x1F) not float strings
         val_m = max(0, min(255, int(measure_vol * 100)))
         val_t = max(0, min(255, int(target_vol * 100)))
+        
         hex_m = f"#x{val_m:02X}\n"
         hex_t = f"#x{val_t:02X}\n"
         
         try:
-            # Synchronous Calls (Ensures PID and Tau stay in sync)
-            self.process.stdin.write(hex_m); self.process.stdin.flush()
-            self.process.stdin.write(hex_t); self.process.stdin.flush()
+            # STEP 1: Wait for i1 -> Send i1
+            self._read_until_token("i1", 1.0)
+            self.process.stdin.write(hex_m)
+            self.process.stdin.flush()
             
-            # Log TX
-            if self.logger: self.logger(f"TX: i1={hex_m.strip()} i2={hex_t.strip()}", "cyan")
+            # STEP 2: Wait for i2 -> Send i2
+            self._read_until_token("i2", 1.0)
+            self.process.stdin.write(hex_t)
+            self.process.stdin.flush()
             
-            response = self._read_until_prompt(1.0)
+            # STEP 3: Wait for o1 output
+            # We read enough buffer to ensure we capture the value
+            # We do NOT use split() here to avoid crashes.
+            response = self._read_until_token("o1", 0.5)
             
-            # Parse Response
-            if "o1[" in response and ":=" in response:
-                parts = response.split(":=")
-                val_part = parts[-1].strip().split()[0]
+            # Continue reading a bit more if we have the prompt but not the value
+            if ":=" in response and not re.search(r":=\s*([#\w]+)", response):
+                 time.sleep(0.05) # Tiny wait for the value to arrive
+                 while not self.output_queue.empty():
+                     response += self.output_queue.get()
+            
+            # STEP 4: Regex Parse (The Crash Fix)
+            # Looks for ":= " followed by any word chars or #
+            clean_resp = self._clean_text(response)
+            
+            # Match patterns like: := #x32, := 0, := T
+            match = re.search(r":=\s*([#]?[xXbB]?[0-9a-fA-F]+|T|F)", clean_resp)
+            
+            if match:
+                val_part = match.group(1).strip()
                 
-                # Log RX
-                if self.logger: self.logger(f"RX: {val_part}", "normal")
+                # if self.logger: self.logger(f"RX: {val_part}", "normal") # Debug print
                 
                 if "#x" in val_part: res = int(val_part.replace("#x",""), 16)
                 elif "#b" in val_part: res = int(val_part.replace("#b",""), 2)
                 elif "T" in val_part: res = 1
+                elif "F" in val_part: res = 0
                 else: 
                     try: res = int(val_part)
                     except: res = 0
-                return float(res) / 10.0
                 
-        except: return None
-        return None
-
-    def close(self):
-        self.stop_event.set()
-        if self.process: self.process.terminate()
+                return float(res) / 10.0
+            else:
+                # If regex failed, it means we didn't get a valid value yet.
+                # Return None (safe fail) instead of crashing.
+                return None
+                
+        except Exception as e:
+            if self.logger: self.logger(f"![IO] {e}", "red")
+            return None
 
 # ==============================================================================
 # 4. GUI APPLICATION
@@ -308,9 +356,18 @@ class TauStudioApp:
         # Pass console logger to interface
         self.tau_interface = TauInterface(self.tau_path.get(), self.console.log)
         
-        self.amp_pid, self.amp_tau = 0.0, 0.0
+        # WARM START: Initialize pumps at Target (0.5 -> 5.0 Force)
+        # This prevents the initial drop to 0.0
+        self.amp_pid = 5.0
+        self.amp_tau = 5.0
+        
+        # Initialize Pump Velocity to 0 (Steady state)
+        self.plant_pid.amp = 5.0
+        self.plant_tau.amp = 5.0
+        
         self.step_idx = 0
-        self.window_size = 300
+        try: self.window_size = int(self.entry_window.get())
+        except: self.window_size = 300
         
         self.data_x, self.data_target = [], []
         self.data_pid_v, self.data_tau_v = [], []
