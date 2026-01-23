@@ -1,6 +1,60 @@
-set charvar off
+# ==============================================================================
+# LEVEL 6: TUNED CONTROLLER (Physics-Correct)
+# Neutral Power adjusted to 25 (#x19) to maintain 0.5 Flow.
+# Gaps closed to prevent "coasting".
+# ==============================================================================
 
-i1 : bv[8] = in console
-o1 : bv[8] = out console
+# LEVEL 6: TUNED CONTROLLER (Physics-Correct)
+TAU_CODE_ONE_LINER = (
+    "set charvar off\n"
+    "i1 : bv[8] = in console\n"
+    "i2 : bv[8] = in console\n"
+    "o1 : bv[8] = out console\n"
+    "run always ("
+    "((i1[t] > (i2[t] + { #x3C }:bv[8]))) ? (o1[t] = o1[t-1]) : "
+    "((i1[t] >= (i2[t] - { #x04 }:bv[8])) && (i1[t] <= (i2[t] + { #x04 }:bv[8]))) ? (o1[t] = { #x19 }:bv[8]) : "
+    "(i1[t] > (i2[t] + { #x28 }:bv[8])) ? (o1[t] = { #x00 }:bv[8]) : "
+    "(i1[t] > (i2[t] + { #x0A }:bv[8])) ? (o1[t] = { #x0A }:bv[8]) : "
+    "(i1[t] < (i2[t] - { #x1E }:bv[8])) ? (o1[t] = { #x64 }:bv[8]) : "
+    "(i1[t] < (i2[t] - { #x0A }:bv[8])) ? (o1[t] = { #x32 }:bv[8]) : "
+    "(o1[t] = { #x19 }:bv[8])"
+    ")\n"
+)
 
-run always ((i1[t] > { #x50 }:bv[8]) ? (((i1[t-1] > { #x50 }:bv[8]) && (i1[t-2] > { #x50 }:bv[8])) ? (o1[t] = { #x00 }:bv[8]) : (o1[t] = o1[t-1])) :((i1[t] < { #x14 }:bv[8]) ?(o1[t] = { #x64 }:bv[8]) :((i1[t] < { #x2D }:bv[8]) ? (o1[t] = { #x3C }:bv[8]) : ((i1[t] > { #x37 }:bv[8]) ? (o1[t] = { #x28 }:bv[8]) :((o1[t] = { #x32 }:bv[8]))))))
+
+# ==============================================================================
+# 0. ROBUST TAU LOGIC (Level 8 - Math/Proportional)
+# ==============================================================================
+# "Math-based" controller instead of "Zone-based".
+# Calculates precise output bit-by-bit: Output = (Target/2) + (Error).
+# Provides maximum 8-bit smoothness.
+TAU_CODE_ONE_LINER = (
+    "set charvar off\n"
+    "i1 : bv[8] = in console\n"
+    "i2 : bv[8] = in console\n"
+    "o1 : bv[8] = out console\n"
+    "run always ("
+    
+    # 1. GLITCH FILTER
+    # If spike detected, Hold Previous Output
+    "((i1[t] > (i2[t] + { #x3C }:bv[8]))) ? (o1[t] = o1[t-1]) : "
+    
+    # 2. OVER-TARGET (Too much flow -> Reduce Power)
+    "(i1[t] > i2[t]) ? ("
+        # Calculate Cut: Error = i1 - i2
+        # Base Power = i2 / 2 (Feed Forward)
+        # If Error > Base, cut to 0. Else subtract Error from Base.
+        "((i1[t] - i2[t]) > (i2[t] >> 1)) ? (o1[t] = 0) : "
+        "(o1[t] = (i2[t] >> 1) - (i1[t] - i2[t]))"
+    ") : "
+    
+    # 3. UNDER-TARGET (Too little flow -> Increase Power)
+    "("
+        # Calculate Boost: Error = i2 - i1
+        # Result = Base + Error
+        # Clamp result to 100 (#x64) to prevent wrapping/overflow
+        "(((i2[t] >> 1) + (i2[t] - i1[t])) > { #x64 }:bv[8]) ? (o1[t] = { #x64 }:bv[8]) : "
+        "(o1[t] = (i2[t] >> 1) + (i2[t] - i1[t]))"
+    ")"
+    ")\n"
+)
