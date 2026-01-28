@@ -2,8 +2,8 @@
 
 For information about Tau-Lang visit: https://github.com/IDNI/tau-lang
 
-For information about Tau-Lang visit: https://github.com/IDNI/tau-testnet
+For information about Tau Test Net visit: https://github.com/IDNI/tau-testnet
 
 For Tau-Lang License details visit: https://github.com/IDNI/tau-lang/blob/main/LICENSE.md
 
-*An effort to present a Logic Controller which uses Tau is being developed in PID vs TAU simulation. This is currently a WIP although an initial implementation is provided.*
+*An effort to present a Logic Controller which uses Tau is being developed in PID vs TAU simulation. This is currently a WIP although an initial implementation is provided, updates to come!*
